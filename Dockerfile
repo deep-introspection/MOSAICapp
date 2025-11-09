@@ -24,10 +24,16 @@ RUN pip install --no-cache-dir \
 RUN mkdir -p /usr/local/share/nltk_data
 
 # punkt tokenizer
-RUN curl -L "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/tokenizers/punkt.zip" \
-      -o /tmp/punkt.zip && \
-    unzip /tmp/punkt.zip -d /usr/local/share/nltk_data && \
-    rm /tmp/punkt.zip
+# RUN curl -L "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/tokenizers/punkt.zip" \
+#       -o /tmp/punkt.zip && \
+#     unzip /tmp/punkt.zip -d /usr/local/share/nltk_data && \
+#     rm /tmp/punkt.zip
+# punkt_tab tokenizer (for NLTK >= 3.9)
+RUN curl -L "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/tokenizers/punkt_tab.zip" \
+      -o /tmp/punkt_tab.zip && \
+    unzip /tmp/punkt_tab.zip -d /usr/local/share/nltk_data && \
+    rm /tmp/punkt_tab.zip
+
 
 # stopwords corpus
 RUN curl -L "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/stopwords.zip" \
