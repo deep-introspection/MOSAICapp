@@ -26,10 +26,17 @@ import json
 NLTK_DATA_DIR = "/usr/local/share/nltk_data"
 if NLTK_DATA_DIR not in nltk.data.path:
     nltk.data.path.append(NLTK_DATA_DIR)
-try:
-    nltk.data.find("tokenizers/punkt")
-except LookupError:
-    nltk.download("punkt", download_dir=NLTK_DATA_DIR)
+
+for resource in ("punkt_tab", "punkt"):
+    try:
+        nltk.data.find(f"tokenizers/{resource}")
+    except LookupError:
+        # Best-effort fallback; if HF blocks downloads, we still have the ones from the Docker build
+        try:
+            nltk.download(resource, download_dir=NLTK_DATA_DIR)
+        except Exception as e:
+            print(f"Could not download NLTK resource {resource}: {e}")
+
 
     
 try:
@@ -348,16 +355,16 @@ def generate_and_save_embeddings(csv_path, docs_file, emb_file,
     # Sentence / report granularity
     # ---------------------
     
-    # --- THIS BLOCK IS NOW MODIFIED ---
     if split_sentences:
         try:
             sentences = [s for r in reports for s in nltk.sent_tokenize(r)]
             docs = [s for s in sentences if len(s.split()) > 2]
-        except LookupError:
-            st.error("NLTK 'punkt' data not found! This is a build error.")
+        except LookupError as e:
+            st.error(f"NLTK tokenizer data not found: {e}")
             st.stop()
     else:
         docs = reports
+
 
     np.save(docs_file, np.array(docs, dtype=object))
     st.success(f"Prepared {len(docs)} documents")
