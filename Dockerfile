@@ -2,12 +2,10 @@ FROM python:3.13.5-slim
 
 WORKDIR /app
 
-# Add 'unzip' to the list of programs to install
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     git \
-    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # 1. Copy ONLY the requirements file first
@@ -16,23 +14,14 @@ COPY requirements.txt ./
 # 2. Run pip install (this layer will now be cached)
 RUN pip3 install -r requirements.txt
 
-# --- NEW NLTK FIX: Manual Download & Unzip ---
-# 3. Create the standard NLTK data directory
-RUN mkdir -p /usr/local/share/nltk_data
+# 3. Download the NLTK resources
+RUN python3 -c "import nltk; nltk.download('punkt'); nltk.download('stopwords')"
 
-# 4. Download and unzip 'punkt'
-RUN curl -L "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/tokenizers/punkt.zip" -o /tmp/punkt.zip && \
-    unzip /tmp/punkt.zip -d /usr/local/share/nltk_data && \
-    rm /tmp/punkt.zip
-
-# 5. Download and unzip 'stopwords'
-RUN curl -L "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/stopwords.zip" -o /tmp/stopwords.zip && \
-    unzip /tmp/stopwords.zip -d /usr/local/share/nltk_data && \
-    rm /tmp/stopwords.zip
-# --- END OF FIX ---
-
-# 6. NOW copy the rest of your app
+# 4. NOW copy the rest of your app
 COPY app.py ./
+# We can add this back now, it won't break the cache
+# If you upload your 'data' folder, uncomment the next line
+# COPY data/ ./data/
 
 EXPOSE 8501
 
