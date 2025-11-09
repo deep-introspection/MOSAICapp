@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+
+# Streamlit local secrets (never commit)
+.streamlit/secrets.toml
+
+# Editor junk
+.DS_Store
+MOSAICapp.code-workspace
+
+# Caches
+.cache/
+**/__pycache__/
+
+# Big/binary artifacts (belt & suspenders)
+*.npy
+*.npz
+*.pt
+*.bin
+*.gguf
+
+# Ignore *everything* under data/, keep only .gitkeep files
+data/
+!data/.gitkeep
+!data/**/.gitkeep
+
+# (Optional) Do the same for eval/ if you don't want outputs tracked
+eval/
+!eval/.gitkeep
+!eval/**/.gitkeep
+data/*/preprocessed/cache/
+data/
