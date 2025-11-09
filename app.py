@@ -130,28 +130,9 @@ def count_clean_reports(csv_path: str) -> int:
     return len(df)
 
 
-def ensure_sentence_tokenizer():
-    """
-    Make sure NLTK sentence tokenizer data is available.
-
-    Newer NLTK (3.9+) uses 'punkt_tab' for sent_tokenize(),
-    older versions use 'punkt'
-    """
-    for resource in ("punkt_tab", "punkt"):
-        try:
-            nltk.data.find(f"tokenizers/{resource}")
-            return
-        except LookupError:
-            # Try to download it
-            try:
-                nltk.download(resource)
-                return
-            except Exception as e:
-                print(f"Failed to download NLTK resource '{resource}': {e}")
-
-    # If we reach here, we didn't manage to get any tokenizer
-    raise LookupError("Could not load NLTK punkt or punkt_tab tokenizer data.")
-
+# --- THIS CONFLICTING FUNCTION IS NOW REMOVED ---
+# def ensure_sentence_tokenizer():
+#     ...
 
 
 # =====================================================================
@@ -171,16 +152,9 @@ st.markdown(
     """
 )
 
-# ROOT = project_root()
-# sys.path.append(str(ROOT / "MULTILINGUAL"))
-
-
-
 # =====================================================================
 # 2. Dataset paths (using MOSAIC structure)
 # =====================================================================
-
-# DATASET = "INNERSPEECH"
 
 # --- Choose dataset/project name (drives folder names) ---
 ds_input = st.sidebar.text_input("Project/Dataset name", value="MOSAIC", key="dataset_name_input")
@@ -209,10 +183,6 @@ with st.sidebar.expander("About the dataset name", expanded=False):
         """.strip()
     )
 
-# DATASETS = {
-#     "API Translation (Batched)": str(PROC_DIR / "innerspeech_translated_batched_API.csv"),
-#     "Local Translation (Llama)": str(PROC_DIR / "innerspeech_dataset_translated_llama.csv"),
-# }
 
 def _list_server_csvs(proc_dir: Path) -> list[str]:
     return [str(p) for p in sorted(proc_dir.glob("*.csv"))]
@@ -287,21 +257,6 @@ def perform_topic_modeling(_docs, _embeddings, config_hash):
     # Prepare vectorizer parameters
     if "ngram_range" in config["vectorizer_params"]:
         config["vectorizer_params"]["ngram_range"] = tuple(config["vectorizer_params"]["ngram_range"])
-
-    # Load LLM for labeling
-    # llm = load_llm_model() # <-- REMOVED
-
-#     prompt = """Q:
-# You are an expert in micro-phenomenology. The following documents are reflections from participants about their experience.
-# I have a topic that contains the following documents:
-# [DOCUMENTS]
-# The topic is described by the following keywords: '[KEYWORDS]'.
-# Based on the above information, give a short, informative label (5–10 words).
-# A:"""
-
-    # rep_model = {
-    #     "LLM": LlamaCPP(llm, prompt=prompt, nr_docs=25, doc_length=300, tokenizer="whitespace")
-    # }
     
     # <-- MODIFIED: Use BERTopic's default representation instead of LLM
     rep_model = None 
@@ -384,15 +339,15 @@ def generate_and_save_embeddings(csv_path, docs_file, emb_file,
     # ---------------------
     # Sentence / report granularity
     # ---------------------
+    
+    # --- THIS BLOCK IS NOW MODIFIED ---
     if split_sentences:
         try:
-            ensure_sentence_tokenizer()
-        except LookupError as e:
-            st.error(f"Failed to load NLTK sentence tokenizer data: {e}")
+            sentences = [s for r in reports for s in nltk.sent_tokenize(r)]
+            docs = [s for s in sentences if len(s.split()) > 2]
+        except LookupError:
+            st.error("NLTK 'punkt' data not found! This is a build error.")
             st.stop()
-
-        sentences = [s for r in reports for s in nltk.sent_tokenize(r)]
-        docs = [s for s in sentences if len(s.split()) > 2]
     else:
         docs = reports
 
@@ -445,32 +400,6 @@ source = st.sidebar.radio(
 uploaded_csv_path = None
 CSV_PATH = None  # will be set in the chosen branch
 
-# if source == "Use preprocessed CSV on server":
-#     # Show dataset selector ONLY in this branch
-#     selected_dataset_name = st.sidebar.selectbox(
-#         "Choose a dataset",
-#         list(DATASETS.keys()),
-#         key="dataset_name",
-#     )
-#     CSV_PATH = DATASETS[selected_dataset_name]
-
-# else:  # Upload my own CSV
-#     up = st.sidebar.file_uploader("Upload a CSV", type=["csv"], key="upload_csv")
-#     if up is not None:
-#         tmp_df = pd.read_csv(up)
-#         col = _pick_text_column(tmp_df)
-#         if col is None:
-#             st.error("CSV must contain a text column such as: " + ", ".join(ACCEPTABLE_TEXT_COLUMNS))
-#             st.stop()
-#         if col != "reflection_answer_english":
-#             tmp_df = tmp_df.rename(columns={col: "reflection_answer_english"})
-#         uploaded_csv_path = str((PROC_DIR / "uploaded.csv").resolve())
-#         tmp_df.to_csv(uploaded_csv_path, index=False)
-#         st.success(f"Uploaded CSV saved to {uploaded_csv_path}")
-#         CSV_PATH = uploaded_csv_path
-#     else:
-#         st.info("Upload a CSV to continue.")
-#         st.stop()
 if source == "Use preprocessed CSV on server":
     # List preprocessed CSVs inside this dataset’s folder
     available = _list_server_csvs(PROC_DIR)
@@ -517,25 +446,13 @@ st.sidebar.markdown("---")
 # --- Embedding model selection ---
 st.sidebar.header("Model Selection")
 
-
-
-# selected_embedding_model = st.sidebar.selectbox("Choose an embedding model", (
-#     "intfloat/multilingual-e5-large-instruct",
-#     "Qwen/Qwen3-Embedding-0.6B",
-#     "BAAI/bge-small-en-v1.5",
-#     "sentence-transformers/all-mpnet-base-v2",
-# ))
-
+# Default is now the small model to prevent OOM crash on start
 selected_embedding_model = st.sidebar.selectbox("Choose an embedding model", (
     "BAAI/bge-small-en-v1.5",
     "intfloat/multilingual-e5-large-instruct",
     "Qwen/Qwen3-Embedding-0.6B",
     "sentence-transformers/all-mpnet-base-v2",
 ))
-
-
-
-
 
 # --- Device selection ---
 # st.sidebar.header("Data Preparation")
@@ -544,11 +461,6 @@ selected_device = st.sidebar.radio(
     ["GPU (MPS)", "CPU"],
     index=0,
 )
-
-
-
-
-
 
 # =====================================================================
 # 7. Precompute filenames and pipeline triggers
