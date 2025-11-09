@@ -485,13 +485,15 @@ if CSV_PATH is None:
 @st.cache_data
 def get_text_columns(csv_path: str) -> list[str]:
     df_sample = pd.read_csv(csv_path, nrows=2000)
-    if not text_columns:
-        st.error(
-            "No columns found in this CSV. At least one column is required."
-        )
-        st.stop()
-
     return _list_text_columns(df_sample)
+
+text_columns = get_text_columns(CSV_PATH)
+
+if not text_columns:
+    st.error(
+        "No columns found in this CSV. At least one column is required."
+    )
+    st.stop()
 
 
 text_columns = get_text_columns(CSV_PATH)
