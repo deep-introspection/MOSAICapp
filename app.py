@@ -939,7 +939,8 @@ else:
                 )
 
             st.caption("Preview (one row per topic)")
-            st.dataframe(export_csv.head(10))
+            # st.dataframe(export_csv.head(10))
+            st.dataframe(export_csv)
 
         else:
             st.info("Click 'Run Analysis' to begin.")
