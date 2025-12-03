@@ -101,6 +101,24 @@ def _slugify(s: str) -> str:
     s = re.sub(r"[^A-Za-z0-9._-]+", "_", s)
     return s or "DATASET"
 
+def _cleanup_old_cache(current_slug: str):
+    """Deletes precomputed .npy files that do not match the current dataset slug."""
+    if not CACHE_DIR.exists():
+        return
+    
+    removed_count = 0
+    # Iterate over all precomputed files
+    for p in CACHE_DIR.glob("precomputed_*.npy"):
+        # If the file belongs to a different dataset (doesn't contain the new slug)
+        if current_slug not in p.name:
+            try:
+                p.unlink() # Delete file
+                removed_count += 1
+            except Exception as e:
+                print(f"Error deleting {p.name}: {e}")
+                
+    if removed_count > 0:
+        print(f"Auto-cleanup: Removed {removed_count} old cache files.")
 
 # "Nice" default names we know from MOSAIC; NOT a hard constraint anymore
 ACCEPTABLE_TEXT_COLUMNS = [
@@ -459,24 +477,6 @@ else:
         "After upload, you’ll be able to choose which text column to analyse."
     )
 
-    # if up is not None:
-    #     tmp_df = pd.read_csv(up)
-    #     if tmp_df.empty:
-    #         st.error("Uploaded CSV is empty.")
-    #         st.stop()
-
-    # if up is not None:
-    #     try:
-    #         # Try loading as standard UTF-8
-    #         tmp_df = pd.read_csv(up)
-    #     except UnicodeDecodeError:
-    #         # If that fails (e.g., Excel/Windows CSV), try ISO-8859-1 (Latin-1)
-    #         up.seek(0)  # Reset file pointer to the beginning
-    #         tmp_df = pd.read_csv(up, encoding='ISO-8859-1')
-            
-    #     if tmp_df.empty:
-    #         st.error("Uploaded CSV is empty.")
-    #         st.stop()
 
     if up is not None:
         # List of encodings to try: 
@@ -508,8 +508,18 @@ else:
         # Optional: Print which encoding worked to the logs (for your info)
         print(f"Successfully loaded CSV using {success_encoding} encoding.")
 
-        # Just save; we’ll choose the text column later
-        uploaded_csv_path = str((PROC_DIR / "uploaded.csv").resolve())
+        # # Just save; we’ll choose the text column later
+        # uploaded_csv_path = str((PROC_DIR / "uploaded.csv").resolve())
+        # tmp_df.to_csv(uploaded_csv_path, index=False)
+        # st.success(f"Uploaded CSV saved to {uploaded_csv_path}")
+        # CSV_PATH = uploaded_csv_path
+
+        # FIX: Use the original filename to avoid cache collisions
+        # We sanitize the name to be safe for file systems
+        safe_filename = _slugify(os.path.splitext(up.name)[0])
+        _cleanup_old_cache(safe_filename)
+        uploaded_csv_path = str((PROC_DIR / f"{safe_filename}.csv").resolve())
+        
         tmp_df.to_csv(uploaded_csv_path, index=False)
         st.success(f"Uploaded CSV saved to {uploaded_csv_path}")
         CSV_PATH = uploaded_csv_path
@@ -930,16 +940,36 @@ else:
                         st.error(f"Failed to save JSONL: {e}")
 
             with cR:
+
+                # Create a Long Format DataFrame (One row per sentence)
+                # This ensures NO text is hidden due to Excel cell limits
+                long_format_df = doc_info.copy()
+                long_format_df["Topic Name"] = long_format_df["Topic"].map(llm_names).fillna("Unlabelled")
+                
+                # Reorder columns for clarity
+                long_format_df = long_format_df[["Topic", "Topic Name", "Document"]]
+                
+                # Define filename
+                long_csv_name = f"all_sentences_{base}_{gran}.csv"
+                
                 st.download_button(
-                    "Download CSV",
-                    data=export_csv.to_csv(index=False).encode("utf-8-sig"),
-                    file_name=csv_name,
+                    "Download All Sentences (Long Format)",
+                    data=long_format_df.to_csv(index=False).encode("utf-8-sig"),
+                    file_name=long_csv_name,
                     mime="text/csv",
                     use_container_width=True,
+                    help="Download a CSV with one row per sentence. Best for checking exactly which sentences belong to which topic."
                 )
+                
+                # st.download_button(
+                #     "Download CSV",
+                #     data=export_csv.to_csv(index=False).encode("utf-8-sig"),
+                #     file_name=csv_name,
+                #     mime="text/csv",
+                #     use_container_width=True,
+                # )
 
-            st.caption("Preview (one row per topic)")
-            # st.dataframe(export_csv.head(10))
+            # st.caption("Preview (one row per topic)")
             st.dataframe(export_csv)
 
         else:
