@@ -31,8 +31,7 @@ RUN python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab'); 
 COPY . .
 
 # 6. Run the Unified App (Back to app.py!)
-CMD ["streamlit", "run", "app2.0.py", "--server.port=7860", "--server.address=0.0.0.0"]
-
+CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0"]
 
 
 
