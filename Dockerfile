@@ -53,7 +53,7 @@ EXPOSE 7860
 HEALTHCHECK CMD curl --fail http://localhost:${PORT}/_stcore/health || exit 1
 
 # ---- Run Streamlit ----
-ENTRYPOINT ["bash", "-c", "streamlit run app.py \
+ENTRYPOINT ["bash", "-c", "streamlit run app_with_LLM.py \
     --server.port=${PORT} \
     --server.address=0.0.0.0 \
     --server.enableCORS=false \
