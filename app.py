@@ -21,6 +21,13 @@ import os
 import nltk
 import json
 
+# from huggingface_hub import hf_hub_download, InferenceClient # for the LLM API command
+from huggingface_hub import InferenceClient # for the LLM API command
+
+
+
+
+
 # =====================================================================
 # NLTK setup
 # =====================================================================
@@ -243,7 +250,7 @@ DATASETS = None  # keep name for clarity; we’ll fill it when rendering the sid
 HISTORY_FILE = str(PROC_DIR / "run_history.json")
 
 # =====================================================================
-# 3. Embedding & LLM loaders
+# 3. Embedding loaders
 # =====================================================================
 
 
@@ -251,6 +258,7 @@ HISTORY_FILE = str(PROC_DIR / "run_history.json")
 def load_embedding_model(model_name):
     st.info(f"Loading embedding model '{model_name}'...")
     return SentenceTransformer(model_name)
+
 
 
 @st.cache_data
@@ -261,7 +269,182 @@ def load_precomputed_data(docs_file, embeddings_file):
 
 
 # =====================================================================
-# 4. Topic modeling function
+# 4. LLM loaders
+# =====================================================================
+
+#ADDED FOR LLM (START)
+@st.cache_resource
+def get_hf_client(model_id: str):
+    token = os.environ.get("HF_TOKEN")
+    if not token:
+        try:
+            token = st.secrets.get("HF_TOKEN")
+        except Exception:
+            token = None
+
+    # Bake the model into the client so you don't pass model= every call
+    client = InferenceClient(model=model_id, token=token)
+    return client, token
+
+def _labels_cache_path(config_hash: str, model_id: str) -> Path:
+    safe_model = re.sub(r"[^a-zA-Z0-9_.-]", "_", model_id)
+    return CACHE_DIR / f"llm_labels_{safe_model}_{config_hash}.json"
+
+
+SYSTEM_PROMPT = """You are an expert phenomenologist analysing subjective reflections from specific experiences.
+Your task is to label a cluster of similar experiential reports.
+
+The title should be:
+1. HIGHLY SPECIFIC to the experiential characteristic unique to this "phenomenological" cluster
+2. PHENOMENOLOGICALLY DESCRIPTIVE (focus on *what* was felt/seen).
+3. DISTINCTIVE enough that it wouldn't apply equally well to other "phenomenological" clusters
+4. TECHNICALLY PRECISE, using domain-specific terminology where appropriate
+5. CONCEPTUALLY FOCUSED on the core specificities of this type of experience
+
+
+Constraints:
+- Output ONLY the label (no explanation).
+- 3–7 words.
+- No punctuation, no quotes, no extra text.
+- Do not explain your reasoning
+"""
+
+
+USER_TEMPLATE = """Here is a cluster of participant reports describing a specific phenomenon:
+
+{documents}
+
+Top keywords associated with this cluster:
+{keywords}
+
+Task: Return a single scientifically precise label (3–7 words). Output ONLY the label.
+"""
+
+def _clean_label(x: str) -> str:
+    x = (x or "").strip()
+    x = x.splitlines()[0].strip()          # first line only
+    x = x.strip(' "\'`')
+    x = re.sub(r"[.:\-–—]+$", "", x).strip()  # remove trailing punctuation
+    # enforce "no punctuation" lightly (optional):
+    x = re.sub(r"[^\w\s]", "", x).strip()
+    return x or "Unlabelled"
+
+
+
+# def generate_labels_via_api(tm, model_id: str, prompt_template: str,
+#                             max_topics: int = 40, reps_per_topic: int = 8):
+#     client, token = get_hf_client(model_id)
+#     if not token:
+#         raise RuntimeError("No HF_TOKEN found (Space Settings → Secrets).")
+
+#     topic_info = tm.get_topic_info()
+#     topic_info = topic_info[topic_info.Topic != -1].head(max_topics)
+
+#     labels = {}
+#     for tid in topic_info.Topic.tolist():
+#         kws = [w for (w, _) in (tm.get_topic(tid) or [])][:10]
+#         reps = (tm.get_representative_docs(tid) or [])[:reps_per_topic]
+
+#         docs_block = "\n- " + "\n- ".join([r[:300].replace("\n", " ") for r in reps])
+#         prompt = (prompt_template
+#                   .replace("[KEYWORDS]", ", ".join(kws))
+#                   .replace("[DOCUMENTS]", docs_block))
+
+#         out = client.text_generation(
+#             prompt,
+#             max_new_tokens=32,
+#             temperature=0.2,
+#             stop=["\n"],  # stop is the current arg; stop_sequences is deprecated
+#         )
+#         labels[int(tid)] = _clean_label(out)
+
+#     return labels
+
+
+
+
+def generate_labels_via_chat_completion(
+    topic_model: BERTopic,
+    docs: list[str],
+    config_hash: str,
+    model_id: str = "meta-llama/Meta-Llama-3-8B-Instruct",
+    max_topics: int = 40,
+    max_docs_per_topic: int = 8,
+    doc_char_limit: int = 300,
+    temperature: float = 0.2,
+    force: bool = False) -> dict[int, str]:
+    """
+    Label topics AFTER fitting (fast + stable on Spaces).
+    Returns {topic_id: label}.
+    """
+    cache_path = _labels_cache_path(config_hash, model_id)
+
+    if (not force) and cache_path.exists():
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            return {int(k): str(v) for k, v in cached.items()}
+        except Exception:
+            pass
+
+    client, token = get_hf_client(model_id)
+    if not token:
+        raise RuntimeError("No HF_TOKEN found in env/secrets.")
+
+    topic_info = topic_model.get_topic_info()
+    topic_info = topic_info[topic_info.Topic != -1].head(max_topics)
+
+    labels: dict[int, str] = {}
+    prog = st.progress(0)
+    total = len(topic_info)
+
+    for i, tid in enumerate(topic_info.Topic.tolist(), start=1):
+        words = topic_model.get_topic(tid) or []
+        keywords = ", ".join([w for (w, _) in words[:10]])
+
+        try:
+            reps = (topic_model.get_representative_docs(tid) or [])[:max_docs_per_topic]
+        except Exception:
+            reps = []
+
+        # keep prompt small
+        reps = [r.replace("\n", " ").strip()[:doc_char_limit] for r in reps if str(r).strip()]
+        if reps:
+            docs_block = "\n".join([f"- {r}" for r in reps])
+        else:
+            docs_block = "- (No representative docs available)"
+
+        user_prompt = USER_TEMPLATE.format(documents=docs_block, keywords=keywords)
+
+        # --- THE KEY PART: chat_completion ---
+        out = client.chat_completion(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=24,
+            temperature=temperature,
+            stop=["\n"],
+        )
+        # ------------------------------------
+
+        raw = out.choices[0].message.content
+        labels[int(tid)] = _clean_label(raw)
+
+        prog.progress(int(100 * i / max(total, 1)))
+
+    try:
+        cache_path.write_text(json.dumps({str(k): v for k, v in labels.items()}, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    return labels
+#ADDED FOR LLM (END)
+
+
+
+# =====================================================================
+# 5. Topic modeling function
 # =====================================================================
 
 
@@ -354,7 +537,7 @@ def perform_topic_modeling(_docs, _embeddings, config_hash):
 
 
 # =====================================================================
-# 5. CSV → documents → embeddings pipeline
+# 6. CSV → documents → embeddings pipeline
 # =====================================================================
 
 
@@ -438,7 +621,7 @@ def generate_and_save_embeddings(
 
 
 # =====================================================================
-# 6. Sidebar — dataset, upload, parameters
+# 7. Sidebar — dataset, upload, parameters
 # =====================================================================
 
 st.sidebar.header("Data Input Method")
@@ -826,6 +1009,11 @@ else:
             )
         st.session_state.latest_results = (model, reduced, labels)
 
+        ### ADD FOR LLM (START)
+        st.session_state.latest_config_hash = get_config_hash(current_config)
+        st.session_state.latest_config = current_config
+        ### ADD FOR LLM (END)
+
         entry = {
             "timestamp": str(pd.Timestamp.now()),
             "config": current_config,
@@ -846,6 +1034,92 @@ else:
         if "latest_results" in st.session_state:
             tm, reduced, labs = st.session_state.latest_results
 
+            #USE NEW LABELS
+
+            # ##### ADDED FOR LLM (START)
+            # st.subheader("LLM topic labelling (via Hugging Face API)")
+            
+            # model_id = st.text_input(
+            #     "HF model id for labelling",
+            #     value="meta-llama/Meta-Llama-3-8B-Instruct",
+            # )
+            
+            # prompt_template = st.text_area(
+            #     "Prompt template",
+            #     value=YOUR_PROMPT_STRING,  # define it once (see below)
+            #     height=220,
+            # )
+            
+            # max_topics = st.slider("Max topics to label", 5, 80, 40)
+            # reps_per_topic = st.slider("Representative excerpts per topic", 2, 15, 8)
+            
+            # do_label = st.button("Generate LLM labels (API)")
+            
+            # if do_label:
+            #     try:
+            #         llm_names = generate_labels_via_api(
+            #             tm,
+            #             model_id=model_id,
+            #             prompt_template=prompt_template,
+            #             max_topics=max_topics,
+            #             reps_per_topic=reps_per_topic,
+            #         )
+            #         st.session_state.llm_names = llm_names
+            #         st.success(f"Generated {len(llm_names)} labels.")
+            #     except Exception as e:
+            #         st.error(str(e))
+            
+            # # Merge labels (LLM overrides keyword names)
+            # name_map = tm.get_topic_info().set_index("Topic")["Name"].to_dict()
+            # llm_names = st.session_state.get("llm_names", {})
+            # final_name_map = {**name_map, **llm_names}
+            
+            # # rebuild per-document labels for plotting
+            # labs = [final_name_map.get(t, "Unlabelled") for t in tm.topics_]
+
+
+            # ##### ADDED FOR LLM (END)
+
+
+            ##### ADDED FOR LLM (START)
+            st.subheader("LLM topic labelling (via Hugging Face API)")
+
+            model_id = st.text_input(
+                "HF model id for labelling",
+                value="meta-llama/Meta-Llama-3-8B-Instruct",
+            )
+            
+            cA, cB, cC = st.columns([1, 1, 2])
+            max_topics = cA.slider("Max topics", 5, 120, 40, 5)
+            force = cB.checkbox("Force regenerate", value=False)
+            
+            if cC.button("Generate LLM labels (API)", use_container_width=True):
+                try:
+                    cfg_hash = st.session_state.get("latest_config_hash", "nohash")
+                    llm_names = generate_labels_via_chat_completion(
+                        topic_model=tm,
+                        docs=docs,
+                        config_hash=cfg_hash,
+                        model_id=model_id,
+                        max_topics=max_topics,
+                        force=force,
+                    )
+                    st.session_state.llm_names = llm_names
+                    st.success(f"Generated {len(llm_names)} labels.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"LLM labelling failed: {e}")
+            
+            # Apply labels (LLM overrides keyword names)
+            default_map = tm.get_topic_info().set_index("Topic")["Name"].to_dict()
+            api_map = st.session_state.get("llm_names", {}) or {}
+            final_name_map = {**default_map, **api_map}
+            
+            labs = [final_name_map.get(t, "Unlabelled") for t in tm.topics_]
+            ##### ADDED FOR LLM (END)
+            
+            
+            # VISUALISATION
             st.subheader("Experiential Topics Visualisation")
             fig, _ = datamapplot.create_plot(reduced, labs)
             st.pyplot(fig)
@@ -855,23 +1129,28 @@ else:
 
             st.subheader("Export results (one row per topic)")
 
-            full_reps = tm.get_topics(full=True)
-            llm_reps = full_reps.get("LLM", {})
+            # full_reps = tm.get_topics(full=True)
+            # llm_reps = full_reps.get("LLM", {})
 
-            llm_names = {}
-            for tid, vals in llm_reps.items():
-                try:
-                    llm_names[tid] = (
-                        (vals[0][0] or "").strip().strip('"').strip(".")
-                    )
-                except Exception:
-                    llm_names[tid] = "Unlabelled"
+            # llm_names = {}
+            # for tid, vals in llm_reps.items():
+            #     try:
+            #         llm_names[tid] = (
+            #             (vals[0][0] or "").strip().strip('"').strip(".")
+            #         )
+            #     except Exception:
+            #         llm_names[tid] = "Unlabelled"
 
-            if not llm_names:
-                st.caption("Note: Using default keyword-based topic names.")
-                llm_names = (
-                    tm.get_topic_info().set_index("Topic")["Name"].to_dict()
-                )
+            # if not llm_names:
+            #     st.caption("Note: Using default keyword-based topic names.")
+            #     llm_names = (
+            #         tm.get_topic_info().set_index("Topic")["Name"].to_dict()
+            #     )
+
+            default_map = tm.get_topic_info().set_index("Topic")["Name"].to_dict()
+            api_map = st.session_state.get("llm_names", {}) or {}
+            llm_names = {**default_map, **api_map}
+
 
             doc_info = tm.get_document_info(docs)[["Document", "Topic"]]
 
