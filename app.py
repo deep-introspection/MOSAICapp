@@ -1114,6 +1114,8 @@ else:
             default_map = tm.get_topic_info().set_index("Topic")["Name"].to_dict()
             api_map = st.session_state.get("llm_names", {}) or {}
             final_name_map = {**default_map, **api_map}
+            final_name_map[-1] = "Outliers"
+
             
             labs = [final_name_map.get(t, "Unlabelled") for t in tm.topics_]
             ##### ADDED FOR LLM (END)
