@@ -273,6 +273,12 @@ def load_precomputed_data(docs_file, embeddings_file):
 # 4. LLM loaders
 # =====================================================================
 
+# Approximate price for cost estimates in the UI only.
+# Novita Llama 3 8B is around $0.04 per 1M input tokens
+# and $0.04 per 1M output tokens – adjust if needed.
+HF_APPROX_PRICE_PER_MTOKENS_USD = 0.04
+
+
 #ADDED FOR LLM (START)
 @st.cache_resource
 def get_hf_client(model_id: str):
@@ -290,6 +296,11 @@ def get_hf_client(model_id: str):
 def _labels_cache_path(config_hash: str, model_id: str) -> Path:
     safe_model = re.sub(r"[^a-zA-Z0-9_.-]", "_", model_id)
     return CACHE_DIR / f"llm_labels_{safe_model}_{config_hash}.json"
+
+def _hf_status_code(e: Exception) -> int | None:
+    """Extract HTTP status code from a huggingface_hub error, if present."""
+    resp = getattr(e, "response", None)
+    return getattr(resp, "status_code", None)
 
 
 SYSTEM_PROMPT = """You are an expert phenomenologist analysing subjective reflections from specific experiences.
@@ -332,37 +343,6 @@ def _clean_label(x: str) -> str:
 
 
 
-# def generate_labels_via_api(tm, model_id: str, prompt_template: str,
-#                             max_topics: int = 40, reps_per_topic: int = 8):
-#     client, token = get_hf_client(model_id)
-#     if not token:
-#         raise RuntimeError("No HF_TOKEN found (Space Settings → Secrets).")
-
-#     topic_info = tm.get_topic_info()
-#     topic_info = topic_info[topic_info.Topic != -1].head(max_topics)
-
-#     labels = {}
-#     for tid in topic_info.Topic.tolist():
-#         kws = [w for (w, _) in (tm.get_topic(tid) or [])][:10]
-#         reps = (tm.get_representative_docs(tid) or [])[:reps_per_topic]
-
-#         docs_block = "\n- " + "\n- ".join([r[:300].replace("\n", " ") for r in reps])
-#         prompt = (prompt_template
-#                   .replace("[KEYWORDS]", ", ".join(kws))
-#                   .replace("[DOCUMENTS]", docs_block))
-
-#         out = client.text_generation(
-#             prompt,
-#             max_new_tokens=32,
-#             temperature=0.2,
-#             stop=["\n"],  # stop is the current arg; stop_sequences is deprecated
-#         )
-#         labels[int(tid)] = _clean_label(out)
-
-#     return labels
-
-
-
 
 def generate_labels_via_chat_completion(
     topic_model: BERTopic,
@@ -378,6 +358,10 @@ def generate_labels_via_chat_completion(
     Label topics AFTER fitting (fast + stable on Spaces).
     Returns {topic_id: label}.
     """
+
+    # Remember which HF model id we requested on the last run
+    st.session_state["hf_last_model_param"] = model_id
+    
     cache_path = _labels_cache_path(config_hash, model_id)
 
     if (not force) and cache_path.exists():
@@ -415,22 +399,73 @@ def generate_labels_via_chat_completion(
             docs_block = "- (No representative docs available)"
 
         user_prompt = USER_TEMPLATE.format(documents=docs_block, keywords=keywords)
+        # Store one example prompt (for UI inspection) – will be overwritten each run
+        st.session_state["hf_last_example_prompt"] = user_prompt
+
+        # # --- THE KEY PART: chat_completion ---
+        # out = client.chat_completion(
+        #     model=model_id,
+        #     messages=[
+        #         {"role": "system", "content": SYSTEM_PROMPT},
+        #         {"role": "user", "content": user_prompt},
+        #     ],
+        #     max_tokens=24,
+        #     temperature=temperature,
+        #     stop=["\n"],
+        # )
+        # # ------------------------------------
+
+        # raw = out.choices[0].message.content
+        # labels[int(tid)] = _clean_label(raw)
+
 
         # --- THE KEY PART: chat_completion ---
-        out = client.chat_completion(
-            model=model_id,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            max_tokens=24,
-            temperature=temperature,
-            stop=["\n"],
-        )
+        try:
+            out = client.chat_completion(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=24,
+                temperature=temperature,
+                stop=["\n"],
+            )
+            # Store the provider-returned model id (if available)
+            provider_model = getattr(out, "model", None)
+            if provider_model:
+                st.session_state["hf_last_provider_model"] = provider_model
+        except Exception as e:
+            # Nice message for the specific 402 you're seeing
+            if _hf_status_code(e) == 402:
+                raise RuntimeError(
+                    "Hugging Face returned 402 Payment Required for this LLM call. "
+                    "You have used up the monthly Inference Provider credits on this "
+                    "account. Either upgrade to PRO / enable pay-as-you-go, or skip "
+                    "the 'Generate LLM labels (API)' step."
+                ) from e
+            # Anything else: bubble up the original error
+            raise
         # ------------------------------------
+
+        # --- Best-effort local accounting of token usage (this Streamlit session) ---
+        usage = getattr(out, "usage", None)
+        total_tokens = None
+
+        # `usage` might be a dict (raw JSON) or an object with attributes
+        if isinstance(usage, dict):
+            total_tokens = usage.get("total_tokens")
+        else:
+            total_tokens = getattr(usage, "total_tokens", None)
+
+        if total_tokens is not None:
+            st.session_state.setdefault("hf_tokens_total", 0)
+            st.session_state["hf_tokens_total"] += int(total_tokens)
+        # ---------------------------------------------------------------------------
 
         raw = out.choices[0].message.content
         labels[int(tid)] = _clean_label(raw)
+
 
         prog.progress(int(100 * i / max(total, 1)))
 
@@ -1120,6 +1155,33 @@ else:
                 "HF model id for labelling",
                 value="meta-llama/Meta-Llama-3-8B-Instruct",
             )
+            with st.expander("Show LLM configuration and prompts"):
+                # What we *request*
+                st.markdown(f"**HF model id (requested):** `{model_id}`")
+            
+                # What was used on the last run, if available
+                requested_last = st.session_state.get("hf_last_model_param")
+                provider_model = st.session_state.get("hf_last_provider_model")
+            
+                if requested_last:
+                    st.markdown(f"**Last run – requested model id:** `{requested_last}`")
+                if provider_model:
+                    st.markdown(f"**Last run – provider model (returned):** `{provider_model}`")
+                else:
+                    st.caption("Run LLM labelling once to see the provider-returned model id.")
+            
+                st.markdown("**System prompt:**")
+                st.code(SYSTEM_PROMPT, language="markdown")
+            
+                st.markdown("**User prompt template:**")
+                st.code(USER_TEMPLATE, language="markdown")
+            
+                example_prompt = st.session_state.get("hf_last_example_prompt")
+                if example_prompt:
+                    st.markdown("**Example full prompt for one topic (last run):**")
+                    st.code(example_prompt, language="markdown")
+                else:
+                    st.caption("No example prompt stored yet – run LLM labelling to populate this.")
             
             cA, cB, cC = st.columns([1, 1, 2])
             max_topics = cA.slider("Max topics", 5, 120, 40, 5)
@@ -1147,6 +1209,19 @@ else:
                     st.rerun()
                 except Exception as e:
                     st.error(f"LLM labelling failed: {e}")
+
+
+            # Approximate HF usage for *this* Streamlit session (local estimate only)
+            hf_tokens_total = st.session_state.get("hf_tokens_total", 0)
+            if hf_tokens_total:
+                approx_cost = hf_tokens_total / 1_000_000 * HF_APPROX_PRICE_PER_MTOKENS_USD
+                st.caption(
+                    f"Approx. HF LLM usage this session: ~{hf_tokens_total:,} tokens "
+                    f"(~${approx_cost:.4f} at "
+                    f"${HF_APPROX_PRICE_PER_MTOKENS_USD}/M tokens, "
+                    "based on Novita Llama 3 8B pricing). "
+                )
+                
             
             # Apply labels (LLM overrides keyword names)
             default_map = tm.get_topic_info().set_index("Topic")["Name"].to_dict()
