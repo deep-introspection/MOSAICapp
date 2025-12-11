@@ -550,6 +550,7 @@ def generate_and_save_embeddings(
     split_sentences,
     device,
     text_col=None,
+    min_words: int = 0, #for removal of sentences with <N words
 ):
 
     # ---------------------
@@ -578,15 +579,33 @@ def generate_and_save_embeddings(
     # ---------------------
     # Sentence / report granularity
     # ---------------------
+    # if split_sentences:
+    #     try:
+    #         sentences = [s for r in reports for s in nltk.sent_tokenize(r)]
+    #         docs = [s for s in sentences if len(s.split()) > 2]
+    #     except LookupError as e:
+    #         st.error(f"NLTK tokenizer data not found: {e}")
+    #         st.stop()
+    # else:
+    #     docs = reports
+
+    #change to account for sentence removal when < N words
     if split_sentences:
         try:
             sentences = [s for r in reports for s in nltk.sent_tokenize(r)]
-            docs = [s for s in sentences if len(s.split()) > 2]
         except LookupError as e:
             st.error(f"NLTK tokenizer data not found: {e}")
             st.stop()
+
+        if min_words and min_words > 0:
+            docs = [s for s in sentences if len(s.split()) >= min_words]
+        else:
+            docs = sentences
     else:
-        docs = reports
+        if min_words and min_words > 0:
+            docs = [r for r in reports if len(str(r).split()) >= min_words]
+        else:
+            docs = reports
 
     np.save(docs_file, np.array(docs, dtype=object))
     st.success(f"Prepared {len(docs)} documents")
@@ -770,6 +789,17 @@ selected_granularity = st.sidebar.checkbox(
 )
 granularity_label = "sentences" if selected_granularity else "reports"
 
+#preprocessing action: remove sentences with less than N words
+min_words = st.sidebar.slider(
+    f"Remove {granularity_label} shorter than N words",
+    min_value=1,
+    max_value=20,
+    value=2,  # default = 2 words
+    step=1,
+    help="Units (sentences or reports) with fewer words than this will be discarded "
+         "during preprocessing. After changing, click 'Prepare Data for This Configuration'.",
+)
+
 subsample_perc = st.sidebar.slider("Data sampling (%)", 10, 100, 100, 5)
 
 st.sidebar.markdown("---")
@@ -870,6 +900,7 @@ if not os.path.exists(EMBEDDINGS_FILE):
             selected_granularity,
             selected_device,
             text_col=selected_text_column,
+            min_words=min_words,
         )
 
 else:
