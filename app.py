@@ -1120,11 +1120,10 @@ else:
             # Apply labels (LLM overrides keyword names)
             default_map = tm.get_topic_info().set_index("Topic")["Name"].to_dict()
             api_map = st.session_state.get("llm_names", {}) or {}
-            final_name_map = {**default_map, **api_map}
+            llm_names = {**default_map, **api_map}
 
             # #option to choose to include outliers or not
             # include_outliers_plot = st.checkbox("Include outliers in plot (-1)", value=False)
-
             # topics_arr = np.asarray(tm.topics_)
             # labs_all = [final_name_map.get(int(t), "Unlabelled") for t in topics_arr]
             # if include_outliers_plot:
@@ -1135,11 +1134,9 @@ else:
             #     mask = topics_arr != -1
             #     reduced_plot = reduced[mask]
             #     labs = list(np.asarray(labs_all)[mask])
-
-            
-            labs = [final_name_map.get(t, "Unlabelled") for t in tm.topics_]
+    
+            labs = [llm_names.get(t, "Unlabelled") for t in tm.topics_]
             ##### ADDED FOR LLM (END)
-            
             
             # VISUALISATION
             st.subheader("Experiential Topics Visualisation")
@@ -1169,14 +1166,21 @@ else:
             #         tm.get_topic_info().set_index("Topic")["Name"].to_dict()
             #     )
 
-            default_map = tm.get_topic_info().set_index("Topic")["Name"].to_dict()
-            api_map = st.session_state.get("llm_names", {}) or {}
-            llm_names = {**default_map, **api_map}
+            # default_map = tm.get_topic_info().set_index("Topic")["Name"].to_dict()
+            # api_map = st.session_state.get("llm_names", {}) or {}
+            # llm_names = {**default_map, **api_map}
 
+            model_docs = getattr(tm, "docs_", None)
+            if model_docs is not None and len(docs) != len(model_docs):
+                st.caption(
+                    "Note: export uses the original documents from the topic-model run. "
+                    "The current dataset size is different (e.g. sampling/splitting changed), "
+                    "so you may want to re-run topic modelling before exporting."
+                )
 
-            # doc_info = tm.get_document_info(docs)[["Document", "Topic"]]
-            doc_info = tm.get_document_info()[["Document", "Topic"]] ## Use the documents stored inside the BERTopic model
-            # to avoid length mismatches if `docs` changes after the run
+            # doc_info = tm.get_document_info()[["Document", "Topic"]]
+
+            doc_info = tm.get_document_info(docs)[["Document", "Topic"]]
 
             include_outliers = st.checkbox(
                 "Include outlier topic (-1)", value=False
