@@ -611,19 +611,9 @@ def generate_and_save_embeddings(
     df = df[df["reflection_answer_english"].str.strip() != ""]
     reports = df["reflection_answer_english"].tolist()
 
-    # ---------------------
-    # Sentence / report granularity
-    # ---------------------
-    # if split_sentences:
-    #     try:
-    #         sentences = [s for r in reports for s in nltk.sent_tokenize(r)]
-    #         docs = [s for s in sentences if len(s.split()) > 2]
-    #     except LookupError as e:
-    #         st.error(f"NLTK tokenizer data not found: {e}")
-    #         st.stop()
-    # else:
-    #     docs = reports
-
+    #change to add data sanity check
+    granularity_label = "sentences" if split_sentences else "reports"
+    
     #change to account for sentence removal when < N words
     if split_sentences:
         try:
@@ -632,15 +622,39 @@ def generate_and_save_embeddings(
             st.error(f"NLTK tokenizer data not found: {e}")
             st.stop()
 
+        total_units_before = len(sentences)
+
         if min_words and min_words > 0:
             docs = [s for s in sentences if len(s.split()) >= min_words]
         else:
             docs = sentences
     else:
+        total_units_before = len(reports)
         if min_words and min_words > 0:
             docs = [r for r in reports if len(str(r).split()) >= min_words]
         else:
             docs = reports
+
+    total_units_after = len(docs)
+    removed_units = total_units_before - total_units_after
+
+    # Store stats for later display in "Dataset summary"
+    st.session_state["last_data_stats"] = {
+        "granularity": granularity_label,
+        "min_words": int(min_words or 0),
+        "total_before": int(total_units_before),
+        "total_after": int(total_units_after),
+        "removed": int(removed_units),
+    }
+
+    if min_words and min_words > 0:
+        st.info(
+            f"Preprocessing: started with {total_units_before} {granularity_label}, "
+            f"removed {removed_units} shorter than {min_words} words; "
+            f"{total_units_after} remaining."
+        )
+    else:
+        st.info(f"Preprocessing: {total_units_after} {granularity_label} prepared.")
 
     np.save(docs_file, np.array(docs, dtype=object))
     st.success(f"Prepared {len(docs)} documents")
@@ -967,9 +981,36 @@ else:
     unit = "sentences" if selected_granularity else "reports"
     n_units = len(docs)
 
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     c1.metric("Reports in CSV (cleaned)", n_reports)
     c2.metric(f"Units analysed ({unit})", n_units)
+
+
+    stats = st.session_state.get("last_data_stats")
+    if (
+        stats is not None
+        and stats.get("granularity") == unit
+        and stats.get("min_words", 0) == int(min_words or 0)
+    ):
+        removed = stats["removed"]
+        total_before = stats["total_before"]
+        c3.metric("Units removed (< N words)", removed)
+        st.caption(
+            f"Min-words filter N = {int(min_words or 0)}. "
+            f"Started with {total_before} {unit}, kept {stats['total_after']}."
+        )
+    else:
+        c3.metric("Units removed (< N words)", "–")
+        st.caption(
+            "Change 'Remove units shorter than N words' and click "
+            "'Prepare Data for This Configuration' to update removal stats."
+        )
+
+    
+    with st.expander("Preview preprocessed text (first 10 units)"):
+        preview_df = pd.DataFrame({"text": docs[:10]})
+        st.dataframe(preview_df)
+
 
     # --- Parameter controls ---
     st.sidebar.header("Model Parameters")
