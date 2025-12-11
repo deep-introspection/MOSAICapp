@@ -1277,14 +1277,18 @@ else:
                 max_docs_per_topic = st.slider(
                     "Docs per topic",
                     min_value=2,
-                    max_value=20,
-                    value=10,
+                    max_value=40,
+                    value=8,
                     step=1,
-                    help="How many representative sentences per topic to show the LLM."
+                    help="How many representative sentences per topic to show the LLM. Try keeping low value to not spend all tokens",
+                    key="llm_docs_per_topic",
                 )
-                force = st.checkbox("Force regenerate", value=False)
+                force = st.checkbox(
+                    "Force regenerate",
+                    value=False,
+                    key="llm_force_regenerate",  
+                )
             
-            force = cB.checkbox("Force regenerate", value=False)
             
             if cC.button("Generate LLM labels (API)", use_container_width=True):
                 try:
