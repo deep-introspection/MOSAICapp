@@ -668,11 +668,31 @@ def generate_and_save_embeddings(
 
     model = load_embedding_model(selected_embedding_model)
 
+    # encode_device = None
+    # batch_size = 32
+    # if device == "CPU":
+    #     encode_device = "cpu"
+    #     batch_size = 64
+
     encode_device = None
     batch_size = 32
+
+    # If user selected CPU explicitly, skip all checks
     if device == "CPU":
         encode_device = "cpu"
         batch_size = 64
+    else:
+        # User selected GPU. We try CUDA -> MPS -> CPU
+        import torch
+        if torch.cuda.is_available():
+            encode_device = "cuda"
+            st.toast("Using NVIDIA GPU (CUDA)")
+        elif torch.backends.mps.is_available():
+            encode_device = "mps"
+            st.toast("Using Apple GPU (MPS)")
+        else:
+            encode_device = "cpu"
+            st.warning("No GPU found (neither CUDA nor MPS). Falling back to CPU.")
 
     embeddings = model.encode(
         docs,
@@ -843,7 +863,7 @@ min_words = st.sidebar.slider(
     f"Remove {granularity_label} shorter than N words",
     min_value=1,
     max_value=20,
-    value=2,  # default = 2 words
+    value=3,  # default = 3 words
     step=1,
     help="Units (sentences or reports) with fewer words than this will be discarded "
          "during preprocessing. After changing, click 'Prepare Data for This Configuration'.",
@@ -871,7 +891,7 @@ selected_embedding_model = st.sidebar.selectbox(
 
 selected_device = st.sidebar.radio(
     "Processing device",
-    ["GPU (MPS)", "CPU"],
+    ["GPU", "CPU"],
     index=0,
 )
 
