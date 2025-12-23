@@ -2,8 +2,8 @@
 File: app.py
 Description: Streamlit app for advanced topic modeling on Innerspeech dataset
              with BERTopic, UMAP, HDBSCAN. (LLM features disabled for lite deployment)
-Last Modified: 06/11/2025
-@author: r.beaut
+Last Modified: 23/12/2025
+@author: r.beaut@sussex.ac.uk
 """
 
 # =====================================================================
@@ -29,6 +29,8 @@ from typing import Any
 from io import BytesIO #Download button for the clustering image
 
 
+import hashlib
+from datetime import datetime
 
 
 
@@ -232,6 +234,80 @@ CACHE_DIR = PROC_DIR / "cache"
 PROC_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 EVAL_DIR.mkdir(parents=True, exist_ok=True)
+
+#start add for comparison
+RUNS_DIR = EVAL_DIR / "runs"
+RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
+def make_run_id(cfg: dict) -> str:
+    cfg_str = json.dumps(cfg, sort_keys=True)
+    h = hashlib.md5(cfg_str.encode("utf-8")).hexdigest()[:8]
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{ts}_{h}"
+
+def save_run_snapshot(
+    run_id: str,
+    tm: BERTopic,
+    reduced: np.ndarray,
+    labs: list[str],
+    dataset_title: str,
+    csv_path: str,
+    current_config: dict,
+) -> dict:
+    run_dir = RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    info = tm.get_topic_info()
+    n_units = int(info["Count"].sum()) if "Count" in info.columns else len(labs)
+    outlier_count = 0
+    if {"Topic", "Count"}.issubset(info.columns) and (-1 in info["Topic"].values):
+        outlier_count = int(info.loc[info["Topic"] == -1, "Count"].iloc[0])
+
+    n_topics = int((info["Topic"] != -1).sum()) if "Topic" in info.columns else None
+    outlier_pct = (100.0 * outlier_count / n_units) if n_units else 0.0
+
+    # --- save plot ---
+    fig, _ = datamapplot.create_plot(
+        reduced,
+        labs,
+        noise_label="Unlabelled",
+        noise_color="#CCCCCC",
+        label_font_size=11,
+        arrowprops={"arrowstyle": "-", "color": "#333333"},
+    )
+    fig.suptitle(f"{dataset_title}: MOSAIC Topic Map", fontsize=16, y=0.99)
+
+    plot_png = run_dir / "plot.png"
+    fig.savefig(plot_png, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    # --- save topic info ---
+    topic_info_csv = run_dir / "topic_info.csv"
+    info.to_csv(topic_info_csv, index=False)
+
+    # --- save meta ---
+    meta = {
+        "run_id": run_id,
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "dataset_title": dataset_title,
+        "csv_path": str(csv_path),
+        "config": current_config,
+        "n_units": int(n_units),
+        "n_topics": int(n_topics) if n_topics is not None else None,
+        "outlier_count": int(outlier_count),
+        "outlier_pct": float(outlier_pct),
+        "artifacts": {
+            "plot_png": str(plot_png),
+            "topic_info_csv": str(topic_info_csv),
+        },
+    }
+    meta_json = run_dir / "meta.json"
+    meta_json.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    meta["artifacts"]["meta_json"] = str(meta_json)
+
+    return meta
+
+#end add for comparison 
 
 with st.sidebar.expander("About the dataset name", expanded=False):
     st.markdown(
@@ -923,7 +999,7 @@ selected_device = st.sidebar.radio(
 # =====================================================================
 
 
-def get_precomputed_filenames(csv_path, model_name, split_sentences, text_col):
+def get_precomputed_filenames(csv_path, model_name, split_sentences, text_col,min_words):
     base = os.path.splitext(os.path.basename(csv_path))[0]
     safe_model = re.sub(r"[^a-zA-Z0-9_-]", "_", model_name)
     suf = "sentences" if split_sentences else "reports"
@@ -933,17 +1009,17 @@ def get_precomputed_filenames(csv_path, model_name, split_sentences, text_col):
         safe_col = re.sub(r"[^a-zA-Z0-9_-]", "_", text_col)
         col_suffix = f"_{safe_col}"
 
+    mw_suffix = f"_minw{int(min_words or 0)}"
+
+
     return (
-        str(CACHE_DIR / f"precomputed_{base}{col_suffix}_{suf}_docs.npy"),
-        str(
-            CACHE_DIR
-            / f"precomputed_{base}_{safe_model}{col_suffix}_{suf}_embeddings.npy"
-        ),
+    str(CACHE_DIR / f"precomputed_{base}{col_suffix}_{suf}{mw_suffix}_docs.npy"),
+    str(CACHE_DIR / f"precomputed_{base}_{safe_model}{col_suffix}_{suf}{mw_suffix}_embeddings.npy"),
     )
 
 
 DOCS_FILE, EMBEDDINGS_FILE = get_precomputed_filenames(
-    CSV_PATH, selected_embedding_model, selected_granularity, selected_text_column
+    CSV_PATH, selected_embedding_model, selected_granularity, selected_text_column, min_words
 )
 
 # --- Cache management ---
@@ -1084,6 +1160,7 @@ else:
     current_config = {
         "embedding_model": selected_embedding_model,
         "granularity": granularity_label,
+        "min_words": int(min_words or 0),
         "subsample_percent": subsample_perc,
         "use_vectorizer": use_vectorizer,
         "vectorizer_params": {
@@ -1112,7 +1189,8 @@ else:
     # =================================================================
     # 9. Visualization & History Tabs
     # =================================================================
-    main_tab, history_tab = st.tabs(["Main Results", "Run History"])
+    main_tab, history_tab, compare_tab = st.tabs(["Main Results", "Run History", "Compare Runs"])
+
 
     def load_history():
         path = HISTORY_FILE
@@ -1160,22 +1238,45 @@ else:
             )
         st.session_state.latest_results = (model, reduced, labels)
 
+        # --- AUTO-SAVE RUN SNAPSHOT (plot + stats + topic_info) ---
+        run_id = make_run_id(current_config)
+        dataset_title = ds_input.strip() or DATASET_DIR
+        
+        # Make sure outliers show as "Unlabelled" in the saved plot
+        safe_labs = ["Unlabelled" if t == -1 else lab for t, lab in zip(model.topics_, labels)]
+        
+        meta = save_run_snapshot(
+            run_id=run_id,
+            tm=model,
+            reduced=reduced,
+            labs=safe_labs,
+            dataset_title=dataset_title,
+            csv_path=CSV_PATH,
+            current_config=current_config,
+        )
+
+
         ### ADD FOR LLM (START)
         st.session_state.latest_config_hash = get_config_hash(current_config)
         st.session_state.latest_config = current_config
         ### ADD FOR LLM (END)
 
         entry = {
-            "timestamp": str(pd.Timestamp.now()),
+            "run_id": meta["run_id"],
+            "timestamp": meta["timestamp"],
             "config": current_config,
-            "num_topics": n_topics,
-            "outlier_pct": f"{outlier_pct:.2f}%",
+            "num_topics": meta["n_topics"],
+            "n_units": meta["n_units"],
+            "n_outliers": meta["outlier_count"],
+            "outlier_pct": meta["outlier_pct"],  # float
+            "artifacts": meta["artifacts"],
             "llm_labels": [
                 name
                 for name in model.get_topic_info().Name.values
                 if ("Unlabelled" not in name and "outlier" not in name)
             ],
         }
+
         st.session_state.history.insert(0, entry)
         save_history(st.session_state.history)
         st.rerun()
@@ -1513,10 +1614,75 @@ else:
             for i, entry in enumerate(st.session_state.history):
                 with st.expander(f"Run {i+1} — {entry['timestamp']}"):
                     st.write(f"**Topics:** {entry['num_topics']}")
-                    st.write(
-                        f"**Outliers:** {entry.get('outlier_pct', entry.get('outlier_perc', 'N/A'))}"
-                    )
+                    # st.write(
+                    #     f"**Outliers:** {entry.get('outlier_pct', entry.get('outlier_perc', 'N/A'))}"
+                    # )
+                    outp = entry.get("outlier_pct", None)
+                    if isinstance(outp, (int, float)):
+                        st.write(f"**Outliers:** {outp:.2f}%")
+                    else:
+                        st.write(f"**Outliers:** {outp}")
+
                     st.write("**Topic Labels (default keywords):**")
                     st.write(entry["llm_labels"])
                     with st.expander("Show full configuration"):
                         st.json(entry["config"])
+
+
+
+    with compare_tab:
+        st.subheader("Compare runs")
+    
+        hist = st.session_state.get("history", [])
+        if not hist:
+            st.info("No runs yet.")
+        else:
+            # Table view
+            rows = []
+            for e in hist:
+                cfg = e.get("config", {}) or {}
+                rows.append({
+                    "run_id": e.get("run_id", ""),
+                    "timestamp": e.get("timestamp", ""),
+                    "topics": e.get("num_topics", ""),
+                    "outliers_%": e.get("outlier_pct", ""),
+                    "min_words": cfg.get("min_words", ""),
+                    "granularity": cfg.get("granularity", ""),
+                    "embedding": cfg.get("embedding_model", ""),
+                    "umap_n": (cfg.get("umap_params") or {}).get("n_neighbors", ""),
+                    "umap_dist": (cfg.get("umap_params") or {}).get("min_dist", ""),
+                    "hdb_min_cluster": (cfg.get("hdbscan_params") or {}).get("min_cluster_size", ""),
+                    "hdb_min_samples": (cfg.get("hdbscan_params") or {}).get("min_samples", ""),
+                })
+            df = pd.DataFrame(rows)
+            st.dataframe(df, use_container_width=True)
+    
+            # Side-by-side snapshots
+            run_ids = [e.get("run_id") for e in hist if e.get("run_id")]
+            selected = st.multiselect("Select runs to view plots", run_ids, default=run_ids[:2])
+    
+            chosen = [e for e in hist if e.get("run_id") in selected]
+            if chosen:
+                cols = st.columns(min(3, len(chosen)))
+                for col, e in zip(cols, chosen[:3]):
+                    rid = e.get("run_id", "—")
+                    col.markdown(f"**{rid}**")
+                    outp = e.get("outlier_pct", 0.0)
+                    try:
+                        col.caption(f"Topics: {e.get('num_topics','—')} • Outliers: {float(outp):.2f}%")
+                    except Exception:
+                        col.caption(f"Topics: {e.get('num_topics','—')} • Outliers: {outp}")
+    
+                    plot_path = (e.get("artifacts") or {}).get("plot_png")
+                    if plot_path and os.path.exists(plot_path):
+                        col.image(plot_path, use_container_width=True)
+                    else:
+                        col.caption("No saved plot found.")
+    
+                for e in chosen[3:]:
+                    rid = e.get("run_id", "—")
+                    with st.expander(f"{rid} — details"):
+                        st.json(e.get("config", {}), expanded=False)
+                        plot_path = (e.get("artifacts") or {}).get("plot_png")
+                        if plot_path and os.path.exists(plot_path):
+                            st.image(plot_path, use_container_width=True)
