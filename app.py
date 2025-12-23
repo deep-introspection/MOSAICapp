@@ -1185,55 +1185,53 @@ else:
         if "latest_results" in st.session_state:
             tm, reduced, labs = st.session_state.latest_results
 
-            #USE NEW LABELS
-
-            # ##### ADDED FOR LLM (START)
-            # st.subheader("LLM topic labelling (via Hugging Face API)")
-            
-            # model_id = st.text_input(
-            #     "HF model id for labelling",
-            #     value="meta-llama/Meta-Llama-3-8B-Instruct",
-            # )
-            
-            # prompt_template = st.text_area(
-            #     "Prompt template",
-            #     value=YOUR_PROMPT_STRING,  # define it once (see below)
-            #     height=220,
-            # )
-            
-            # max_topics = st.slider("Max topics to label", 5, 80, 40)
-            # reps_per_topic = st.slider("Representative excerpts per topic", 2, 15, 8)
-            
-            # do_label = st.button("Generate LLM labels (API)")
-            
-            # if do_label:
-            #     try:
-            #         llm_names = generate_labels_via_api(
-            #             tm,
-            #             model_id=model_id,
-            #             prompt_template=prompt_template,
-            #             max_topics=max_topics,
-            #             reps_per_topic=reps_per_topic,
-            #         )
-            #         st.session_state.llm_names = llm_names
-            #         st.success(f"Generated {len(llm_names)} labels.")
-            #     except Exception as e:
-            #         st.error(str(e))
-            
-            # # Merge labels (LLM overrides keyword names)
-            # name_map = tm.get_topic_info().set_index("Topic")["Name"].to_dict()
-            # llm_names = st.session_state.get("llm_names", {})
-            # final_name_map = {**name_map, **llm_names}
-            
-            # # rebuild per-document labels for plotting
-            # labs = [final_name_map.get(t, "Unlabelled") for t in tm.topics_]
-
-
-            # ##### ADDED FOR LLM (END)
-
 
             ##### ADDED FOR LLM (START)
             st.subheader("LLM topic labelling (via Hugging Face API)")
+
+
+            # -------------------------------
+            # START Topic modelling stats (pre-LLM)
+            # -------------------------------
+            info = tm.get_topic_info()
+            
+            total_units = int(info["Count"].sum()) if "Count" in info.columns else len(getattr(tm, "topics_", []))
+            
+            # Topics (excluding outliers)
+            n_topics = int((info["Topic"] != -1).sum()) if "Topic" in info.columns else len(set(tm.topics_)) - (1 if -1 in tm.topics_ else 0)
+            
+            # Outliers
+            if "Topic" in info.columns and "Count" in info.columns and (-1 in info["Topic"].values):
+                outlier_count = int(info.loc[info["Topic"] == -1, "Count"].iloc[0])
+            else:
+                outlier_count = int(sum(1 for t in getattr(tm, "topics_", []) if t == -1))
+            
+            outlier_pct = (100.0 * outlier_count / total_units) if total_units else 0.0
+            
+            st.markdown("#### Topic modelling summary")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Topics found", n_topics)
+            c2.metric("Outliers (-1)", outlier_count)
+            c3.metric("Outlier rate", f"{outlier_pct:.1f}%")
+            c4.metric("Units clustered", total_units)
+            
+            with st.expander("Show topic-size overview"):
+                # Show biggest topics first (excluding outliers)
+                if {"Topic", "Count", "Name"}.issubset(set(info.columns)):
+                    top_sizes = (
+                        info[info["Topic"] != -1][["Topic", "Count", "Name"]]
+                        .sort_values("Count", ascending=False)
+                        .head(15)
+                        .reset_index(drop=True)
+                    )
+                    st.dataframe(top_sizes, use_container_width=True)
+                else:
+                    st.caption("Topic-size overview unavailable (missing columns in topic info).")
+
+            # -------------------------------
+            # END Topic modelling stats (pre-LLM)
+            # -------------------------------
+
 
             model_id = st.text_input(
                 "HF model id for labelling",
