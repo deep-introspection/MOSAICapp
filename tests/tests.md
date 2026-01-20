@@ -1,14 +1,26 @@
-### How to run the tests
+# How to run the tests
 
-# Install pytest if not already installed
+#### Install pytest if not already installed
 pip install pytest
 
-# Run all tests
+#### Run all tests
 pytest tests/ -v
 
-# Run specific test file
-pytest tests/test_utils.py -v
+#### Run specific test file (eg test_core_functions.py)
+pytest tests/test_core_functions.py -v
 
-# Run with coverage (optional)
-pip install pytest-cov
-pytest tests/ -v --cov=.
+
+#Which tests to run:
+
+### Test utility functions (fast)
+pytest tests/test_core_functions.py -v
+
+### Integration tests (slow, run occasionally):
+
+- Without LLM tests
+pytest tests/test_integration.py -v
+
+- With LLM tests (needs token)
+HF_TOKEN=your_token pytest tests/test_integration.py -v
+
+
