@@ -40,10 +40,17 @@ Visit [huggingface.co/spaces/romybeaute/MOSAICapp](https://huggingface.co/spaces
 ### Local installation
 
 ```bash
-git clone https://github.com/romybeaute/MOSAICapp.git
+git clone [https://github.com/romybeaute/MOSAICapp.git](https://github.com/romybeaute/MOSAICapp.git)
 cd MOSAICapp
+
+# Install dependencies and the package in editable mode
 pip install -r requirements.txt
+pip install -e .
+
+# Download NLTK data (required for segmentation)
 python -c "import nltk; nltk.download('punkt')"
+
+# Run the app
 streamlit run app.py
 ```
 
