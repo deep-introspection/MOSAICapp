@@ -40,7 +40,7 @@ Visit [huggingface.co/spaces/romybeaute/MOSAICapp](https://huggingface.co/spaces
 ### Local installation
 
 ```bash
-git clone [https://github.com/romybeaute/MOSAICapp.git](https://github.com/romybeaute/MOSAICapp.git)
+git clone https://github.com/romybeaute/MOSAICapp.git
 cd MOSAICapp
 
 
