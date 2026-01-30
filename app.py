@@ -1125,7 +1125,7 @@ else:
             embeddings = np.vstack(embeddings).astype(np.float32)
         except Exception:
             st.error(
-                "Cached embeddings are invalid. Please regenerate them for this configuration."
+                "Cached embeddings are invalid. Please click on \"Clear cached files for this configuration\" in the sidebar and then regenerate them for this configuration."
             )
             st.stop()
 
